@@ -1,18 +1,19 @@
 import logging
 import re
+from datetime import timedelta
 from typing import Optional
 
 from aiohttp import ClientSession, ClientTimeout
 
 from ados.common import ADOSError
-from ados.config import ADOSConfig
 
 _log = logging.getLogger(__name__)
 
 BASE_URL = "archipelago.gg"
-
 TRACKER_REGEX = re.compile(r"This room has a <a href=\"/tracker/(.*)\">Multiworld Tracker</a>")
 PORT_REGEX = re.compile(r"running on archipelago.gg with port (\d*)")
+
+RETRY_DELAYS = [timedelta(seconds=x) for x in (0, 2, 5, 10)]
 
 
 # Provides access to the data served by the Archipelago web interface. Stores a cached
@@ -20,8 +21,8 @@ PORT_REGEX = re.compile(r"running on archipelago.gg with port (\d*)")
 # requests to archipelago.gg.
 class WebClient:
 
-    def __init__(self, config: ADOSConfig):
-        self._room_url = f"https://{BASE_URL}/room/{config.archipelago_room}"
+    def __init__(self, room_url: str):
+        self._room_url = room_url
         self._tracker_url: Optional[str] = None
         self._server_url: Optional[str] = None
 
@@ -41,7 +42,7 @@ class WebClient:
 
         _log.info("Refreshing web information from '%s'", self.room_url)
 
-        async with ClientSession(timeout=ClientTimeout(5)) as http_session:
+        async with ClientSession(timeout=ClientTimeout(10)) as http_session:
             async with http_session.get(f"{self.room_url}?update") as http_ret:
                 if not http_ret.ok:
                     raise ADOSError(f"Failed to access room at '{self.room_url}' (status code {http_ret.status})")
