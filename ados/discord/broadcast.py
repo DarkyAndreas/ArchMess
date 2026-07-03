@@ -273,7 +273,7 @@ class MessageBroadcaster:
 
         embed = discord.Embed(
             title="Death Link Triggered",
-            description=f":headstone: {text}",
+            description=f"{text}",
             color=EMBED_COLORS["death"]
         )
 
