@@ -26,12 +26,24 @@ DEFAULT_DEATH_LINK_MESSAGES = [
     "{player} has triggered a death link",
 ]
 
+EMBED_COLORS = {
+    "item": discord.Color.blue(),
+    "trap": discord.Color.dark_gray(),
+    "death": discord.Color.red(),
+    "join": discord.Color.green(),
+    "leave": discord.Color.orange(),
+    "chat": discord.Color.blurple(),
+    "server": discord.Color.dark_blue(),
+    "goal": discord.Color.gold(),
+}
+
 
 # Items placed on the broadcast queue for sending to channels.
 class BroadcastItem(NamedTuple):
     channel_names: list[str]
-    content: str
+    content: str | None = None
     mention_user_ids: set[int] = set()
+    embed: Optional[discord.Embed] = None
 
 
 # Configuration for which types of broadcasts to send to a particular channel.
@@ -188,7 +200,14 @@ class MessageBroadcaster:
                     channel_mentions = mentions if channel_name not in self._no_mention_channels else ""
                     if not channel:
                         continue
-                    await channel.send(content.format(mentions=channel_mentions))
+
+                    if item.embed:
+                        await channel.send(
+                            content.format(mentions=channel_mentions) if content else None,
+                            embed=item.embed
+                        )
+                    else:
+                        await channel.send(content.format(mentions=channel_mentions))
 
             except Exception as ex:
                 _log.error("Error broadcasting message to channels %s: %s", item.channel_names, ex)
@@ -197,7 +216,7 @@ class MessageBroadcaster:
     # multiworld. These are subject to a variety of filters based on channel configuration,
     # and may notify users who have subscribed to certain items.
     def _handle_item_send(self, message: ItemSendMessage) -> None:
-        channel_names: list[str] = []
+        channel_names = []
         for channel_name, config in self._channel_configs.items():
             if message.category == ItemCategory.TRAP and config.send_traps:
                 channel_names.append(channel_name)
@@ -213,32 +232,52 @@ class MessageBroadcaster:
 
         self_send = message.to_slot_id == message.from_slot_id
         if message.category == ItemCategory.TRAP:
-            if self_send:
-                content = f":broken_heart: {highlight(from_slot)} subjected themselves to `{item}`"
-            else:
-                content = f":broken_heart: {highlight(from_slot)} subjected {highlight(to_slot)} to `{item}`"
+            title = "Trap Triggered"
+            description = (
+                f"{highlight(from_slot)} subjected "
+                f"{highlight(to_slot) if not self_send else 'themselves'} to `{item}`"
+            )
+            color = EMBED_COLORS["trap"]
         else:
-            # pylint: disable-next = else-if-used
-            if self_send:
-                content = f"{highlight(from_slot)} found their own `{item}`"
-            else:
-                content = f"{highlight(from_slot)} sent {highlight(to_slot)} their `{item}`"
-        content += f"{{mentions}}\n-# via check {location}"
+            title = "Item Sent"
+            description = (
+                f"{highlight(from_slot)} sent {highlight(to_slot)} their `{item}`"
+                if not self_send else
+                f"{highlight(from_slot)} found their own `{item}`"
+            )
+            if message.category == ItemCategory.PROGRESSION:
+                color = discord.Color.yellow()
+            elif message.category == ItemCategory.USEFUL:
+                color = discord.Color.blue()
+            else: color = discord.Color.light_grey()
+            
 
-        _log.info("Handling item '%s' sent from '%s' to '%s'", item, from_slot, to_slot)
+        embed = discord.Embed(
+            title=title,
+            description=f"{description}\n-# via check {location}",
+            color=color
+        )
+
         mention_user_ids = self._state.get_subscribed_users(to_slot, item)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content, mention_user_ids))
+
+        self._broadcast_queue.put_nowait(
+            BroadcastItem(channel_names, None, mention_user_ids, embed)
+        )
 
     def _handle_death_link(self, message: DeathLinkMessage) -> None:
         if not (channel_names := self._filter_channels(lambda config: config.send_death_links)):
             return
 
-        content = highlight(message.slot_name)
-        content = random.choice(self._death_link_messages).format(player=content)
-        content = f":headstone: {content}"
+        player = highlight(message.slot_name)
+        text = random.choice(self._death_link_messages).format(player=player)
 
-        _log.info("Handling death link from '%s'", message.slot_name)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content))
+        embed = discord.Embed(
+            title="Death Link Triggered",
+            description=f":headstone: {text}",
+            color=EMBED_COLORS["death"]
+        )
+
+        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, None, embed=embed))
 
     def _handle_join_leave(self, message: JoinLeaveMessage) -> None:
         if not (channel_names := self._filter_channels(lambda config: config.send_join_leave)):
@@ -246,41 +285,68 @@ class MessageBroadcaster:
 
         slot = self._state.resolve_slot(message.slot_id)
         if message.join_or_leave == JoinLeaveType.JOIN:
-            content = f":arrow_right: {highlight(slot)} has joined the game"
+            embed = discord.Embed(
+                title="Player Joined",
+                description=f"{highlight(slot)} has joined the game",
+                color=EMBED_COLORS["join"]
+            )
         else:
-            content = f":arrow_left: {highlight(slot)} has left the game"
+            embed = discord.Embed(
+                title="Player Left",
+                description=f"{highlight(slot)} has left the game",
+                color=EMBED_COLORS["leave"]
+            )
 
-        _log.info("Handling %s from '%s'", message.join_or_leave.value, slot)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content))
+        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, None, embed=embed))
 
     def _handle_player_chat(self, message: PlayerChatMessage) -> None:
         if not (channel_names := self._filter_channels(lambda config: config.send_player_chat)):
             return
 
         slot = self._state.resolve_slot(message.slot_id)
-        content = f"{highlight(slot)} says: {message.message}"
+
+        embed = discord.Embed(
+            title="Player Chat",
+            description=f"**{highlight(slot)}** says:\n{message.message}",
+            color=EMBED_COLORS["player_chat"]
+        )
 
         _log.info("Handling chat from '%s': '%s'", slot, message.message)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content))
+        self._broadcast_queue.put_nowait(
+            BroadcastItem(channel_names, None, embed=embed)
+        )
 
     def _handle_server_chat(self, message: ServerChatMessage) -> None:
         if not (channel_names := self._filter_channels(lambda config: config.send_server_chat)):
             return
 
-        content = f"Server says: {message.message}"
+        embed = discord.Embed(
+            title="Server Message",
+            description=message.message,
+            color=EMBED_COLORS["server_chat"]
+        )
 
         _log.info("Handling server chat: '%s'", message.message)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content))
+        self._broadcast_queue.put_nowait(
+            BroadcastItem(channel_names, None, embed=embed)
+        )
 
     def _handle_goal_reached(self, message: GoalReachedMessage) -> None:
         if not (channel_names := self._filter_channels(lambda config: config.send_goal_reached)):
             return
 
         slot = self._state.resolve_slot(message.slot_id)
-        content = f":trophy: {highlight(slot)} has reached their goal!"
+
+        embed = discord.Embed(
+            title="Goal Reached!",
+            description=f":trophy: {highlight(slot)} has reached their goal!",
+            color=EMBED_COLORS["goal"]
+        )
 
         _log.info("Handling goal reached for '%s'", slot)
-        self._broadcast_queue.put_nowait(BroadcastItem(channel_names, content))
+        self._broadcast_queue.put_nowait(
+            BroadcastItem(channel_names, None, embed=embed)
+        )
 
     def _filter_channels(self, predicate: Callable[[BroadcastConfig], bool]) -> list[str]:
         return [channel_name for channel_name, config in self._channel_configs.items() if predicate(config)]
