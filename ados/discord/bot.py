@@ -42,9 +42,6 @@ class ADOSBot(commands.Bot):
 
         self._room_manager = ActiveRoomManager(config, self)
 
-        bot_commands = Commands(config, self._room_manager)
-        self.add_cog(bot_commands)
-
     async def execute(self) -> None:
         _log.info("Starting ArchipelaDOS bot with configuration: %s", self._config.model_dump_json())
         await self._room_manager.initialize()
@@ -52,6 +49,8 @@ class ADOSBot(commands.Bot):
         _log.info("Stopping ArchipelaDOS bot")
 
     async def on_ready(self) -> None:
+        bot_commands = Commands(self._config, self._room_manager)
+        await self.add_cog(bot_commands)
         _log.info("Connected to Discord with ID: %d", self.application_id)
 
         self._guild = None
@@ -80,6 +79,7 @@ class ADOSBot(commands.Bot):
             )
 
         self._room_manager.start_broadcasting(self._guild)
+        await self.tree.sync()
 
     async def on_disconnect(self) -> None:
         _log.warning("Disconnected from Discord, reconnect will be attempted automatically")

@@ -1,10 +1,12 @@
 import asyncio
 import random
 import re
+import discord
 from datetime import timedelta
 from enum import Enum
 from typing import Optional, cast
 
+from discord import app_commands
 from discord.ext import commands
 from discord.ext.commands.errors import UserInputError
 
@@ -132,14 +134,16 @@ class Commands(commands.Cog):  # pyright: ignore - pylance hates this pattern
         "Zdravstvuyte",
     ]
 
-    @commands.command(name="hello", help="Greet the bot (it might greet you back)", ignore_extra=False)
-    async def hello(self, ctx: BotContext) -> None:
-        await send_message(ctx, random.choice(Commands.GREETINGS))
+    @app_commands.command(name="hello", description="Greet the bot")
+    async def hello(self, interaction: discord.Interaction):
+        greeting = random.choice(self.GREETINGS)
+        await interaction.response.send_message(greeting)
 
-    @commands.command(name="dmme", help="Trigger the bot to send you a direct message", ignore_extra=False)
-    async def dmme(self, ctx: BotContext) -> None:
-        await ctx.message.author.send(random.choice(Commands.GREETINGS))
-        await send_success(ctx, "Direct message sent")
+    @app_commands.command(name="dmme", description="Sends you a direct message")
+    async def dmme(self, interaction: discord.Interaction):
+        user = interaction.user
+        await user.send(random.choice(self.GREETINGS))
+        await interaction.response.send_message("Direct message sent", ephemeral=True)
 
     @commands.command(name="threadme", help="Trigger the bot to send you a message in a new thread", ignore_extra=False)
     async def threadme(self, ctx: BotContext) -> None:
@@ -159,29 +163,45 @@ class Commands(commands.Cog):  # pyright: ignore - pylance hates this pattern
     async def room(self, ctx: BotContext) -> None:
         raise UserInputError(f"Must specify a sub-command for `{self._config.discord_command_prefix}room`")
 
-    @room.command(name="connect", help="Connect to a new Archipelago room via room ID or socket URL", ignore_extra=False, extras={"ord": 1})  # type: ignore[arg-type]
-    async def room_connect(self, ctx: BotContext, *, flags: RoomFlags) -> None:
-        await self._room_manager.connect(flags.id_or_url, flags.slot, flags.game, cast(Optional[str], flags.password))
-        await send_success(ctx, f"Connected to new room at <{self._room_manager.active_room.location}>")
+    @app_commands.command(name="room_connect", description="Connect to a new room")
+    @app_commands.describe(
+        id_or_url="Room ID or socket URL",
+        slot="Slot name",
+        game="Game name",
+        password="Optional password"
+    )
+    async def room_connect(
+        self,
+        interaction: discord.Interaction,
+        id_or_url: str,
+        slot: str = "ArchipelaDOS",
+        game: str = "Archipelago",
+        password: Optional[str] = None
+    ):
+        await self._room_manager.connect(id_or_url, slot, game, password)
+        await interaction.response.send_message(f"Connected to new room at <{self._room_manager.active_room.location}>")
 
-    @room.command(name="finalize", help="Disconnect from the current Archipelago room, allowing a new connection", ignore_extra=False, extras={"ord": 2})  # type: ignore[arg-type]
-    async def room_finalize(self, ctx: BotContext) -> None:
+    @app_commands.command(name="room_finalize", description="Disconnect from current room")
+    async def room_finalize(self, interaction: discord.Interaction):
         location = self._room_manager.active_room.location
         await self._room_manager.disconnect()
-        await send_success(ctx, f"Disconnected from room at <{location}>")
+        await interaction.response.send_message(f"Disconnected from room at <{location}>")
 
-    @room.command(name="info", help="Get information about the Archipelago room", ignore_extra=False, extras={"ord": 3})  # type: ignore[arg-type]
-    async def room_info(self, ctx: BotContext) -> None:
+    @app_commands.command(name="room_info", description="Get information about the Archipelago room")
+    async def room_info(self, interaction: discord.Interaction):
         slot_names_joined = join_objects(self.state.all_slots())
-        message = ["Room information"]
-        message.extend(f"- {key}: {value}" for key, value in self._room_manager.active_room.get_info().items())
-        message.append(f"- Available slots: {slot_names_joined}")
-        await send_message(ctx, "\n".join(message))
+        info = self._room_manager.active_room.get_info()
+        message_lines = ["Room information"]
+        message_lines.extend(f"- {key}: {value}" for key, value in info.items())
+        message_lines.append(f"- Available slots: {slot_names_joined}")
+        message = "\n".join(message_lines)
+        await interaction.response.send_message(message)
 
-    @room.command(name="refresh", help="Refresh the room on archipelago.gg, reconnecting the bot if it got disconnected", ignore_extra=False, extras={"ord": 4})  # type: ignore[arg-type]
-    async def room_refresh(self, ctx: BotContext) -> None:
+    @app_commands.command(name="room_refresh", description="Refresh the room, reconnecting the bot if disconnected")
+    async def room_refresh(self, interaction: discord.Interaction):
+        location = self._room_manager.active_room.location
         await self._room_manager.active_room.refresh()
-        await send_success(ctx, f"Refreshed room at <{self._room_manager.active_room.location}>")
+        await interaction.response.send_message(f"Refreshed room at <{location}>")
 
     ################################################
     ########### SLOT MANAGEMENT COMMANDS ###########
@@ -211,19 +231,23 @@ class Commands(commands.Cog):  # pyright: ignore - pylance hates this pattern
         self.state.remove_user_slot(ctx.author.id, flags.slot)
         await send_success(ctx, f"You have been unregistered from slot `{flags.slot}`")
 
-    @slot.command(name="list", help="Lists all slots for which you are registered", ignore_extra=False, extras={"ord": 3})  # type: ignore[arg-type]
-    async def slot_list(self, ctx: BotContext) -> None:
-        slots = self.state.get_user_slots(ctx.author.id)
+    @app_commands.command(name="slot_list", description="Lists all slots for which you are registered")
+    async def slot_list(self, interaction: discord.Interaction):
+        slots = self.state.get_user_slots(interaction.user.id)
         if not slots:
-            await send_message(ctx, "You are not registered for any slots")
+            await interaction.response.send_message("You are not registered for any slots")
         else:
             slot_names_joined = join_objects(slots)
-            await send_message(ctx, f"You are registered for the following slots: {slot_names_joined}")
+            await interaction.response.send_message(f"You are registered for the following slots: {slot_names_joined}")
 
-    @slot.command(name="clear", help="Clears your registration for all slots", ignore_extra=False, extras={"ord": 4})  # type: ignore[arg-type]
-    async def slot_clear(self, ctx: BotContext) -> None:
-        self.state.clear_user_slots(ctx.author.id)
-        await send_success(ctx, "You have been unregistered from all slots")
+    @app_commands.command(name="slot_clear", description="Clears your registration for all slots")
+    async def slot_clear(self, interaction: discord.Interaction):
+        slots = self.state.get_user_slots(interaction.user.id)
+        if not slots:
+            await interaction.response.send_message("You are not registered for any slots")
+        else:
+            self.state.clear_user_slots(interaction.user.id)
+            await interaction.response.send_message("You have been unregistered from all slots")
 
     @slot.command(name="info", help="Get information about your registered slots (can filter by slot)", ignore_extra=False, extras={"ord": 5})  # type: ignore[arg-type]
     async def slot_info(self, ctx: BotContext, *, flags: SlotFlagsOptional) -> None:
