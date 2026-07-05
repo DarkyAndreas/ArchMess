@@ -221,15 +221,17 @@ class Commands(commands.Cog):  # pyright: ignore - pylance hates this pattern
     async def slot(self, ctx: BotContext) -> None:
         raise UserInputError(f"Must specify a sub-command for `{self._config.discord_command_prefix}slot`")
 
-    @slot.command(name="add", help="Registers you for the given slot", ignore_extra=False, extras={"ord": 1})  # type: ignore[arg-type]
-    async def slot_add(self, ctx: BotContext, *, flags: SlotFlags) -> None:
-        self.state.add_user_slot(ctx.author.id, flags.slot)
-        await send_success(ctx, f"You have been registered for slot `{flags.slot}`")
-
-    @slot.command(name="remove", help="Unregisters you from the given slot", ignore_extra=False, extras={"ord": 2})  # type: ignore[arg-type]
-    async def slot_remove(self, ctx: BotContext, *, flags: SlotFlags) -> None:
-        self.state.remove_user_slot(ctx.author.id, flags.slot)
-        await send_success(ctx, f"You have been unregistered from slot `{flags.slot}`")
+    @app_commands.command(name="slot_add", description="Registers you for the given slot")
+    async def slot_add(self, interaction: discord.Interaction, slot: str):
+        slot_call = self.state.resolve_slot(slot)
+        self.state.add_user_slot(interaction.user.id, slot_call)
+        await interaction.response.send_message(f"You have been registered for slot `{slot}`")
+    
+    @app_commands.command(name="slot_remove", description="Unregisters you from the given slot")
+    async def slot_remove(self, interaction: discord.Interaction, slot: str):
+        slot_call = self.state.resolve_slot(slot)
+        self.state.remove_user_slot(interaction.user.id, slot_call)
+        await interaction.response.send_message(f"You have been unregistered from slot `{slot}`")
 
     @app_commands.command(name="slot_list", description="Lists all slots for which you are registered")
     async def slot_list(self, interaction: discord.Interaction):
